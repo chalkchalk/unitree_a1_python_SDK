@@ -17,151 +17,161 @@ Use of this source code is governed by the MPL-2.0 license, see LICENSE.
 #include <string>
 #include <iomanip>
 #include <algorithm>
+#include "PDHybridMotorControl.h"
 
 using namespace UNITREE_LEGGED_SDK;
 
-int power_level = 4;
-double max_torque = 15.0;
+const std::string MOTOR_NAMES[12] =
+    {
+        "FR_1",
+        "FR_2",
+        "FR_3",
+        "FL_1",
+        "FL_2",
+        "FL_3",
+        "RR_1",
+        "RR_2",
+        "RR_3",
+        "RL_1",
+        "RL_2",
+        "RL_3",
+
+};
+
+const double UPPER_BOUND[3] = {0.802851455917, 4.18879020479, -0.916297857297};
+const double LOWER_BOUND[3] = {-0.802851455917, -1.0471975512, -2.69653369433};
+const double MAX_TORQUE = 15.0;
+const double SLEEP_DURATION = 0.01;
+const int POWER_LEVEL = 4;
+
+bool is_valid_observation(const LowState &state_data)
+{
+    double sum = 0;
+    for (int i = 0; i < 12; ++i)
+    {
+        sum += std::fabs(state_data.motorState[i].q);
+    }
+    return sum > 0.0;
+}
+
 class RobotInterface
 {
 public:
-    RobotInterface() : safe(LeggedType::A1), udp(LOWLEVEL){
-        udp.Recv();
-        udp.GetRecv(state);
-        state1 = state;
-        std::thread initThread(&RobotInterface::InitEnvironment, this);
-        initThread.detach();  // 让线程在后台运行，不阻塞主线程
-    }
+    RobotInterface();
     LowState ReceiveObservation();
-    void SendCommand(std::array<float, 60> motorcmd);
+    void UpdateCommand(std::array<float, 60> motorcmd);
     void Brake();
-    void Initialize();
-    void InitEnvironment();
+    void SendCommandThread();
+    void UpdateObservation();
 
-    std::array<float, 3> upper_bound{{0.802851455917, 4.18879020479, -0.916297857297}};
-    std::array<float, 3> lower_bound{{-0.802851455917, -1.0471975512, -2.69653369433}};
-
+private:
+    void setup_torque_motors();
+    bool breaking_;
+    PDHybridMotorControl torque_motors[12];
+    std::thread send_command_loop_thread_;
     UDP udp;
     Safety safe;
     LowState state = {0};
-    LowState state1 = {0};
     LowCmd cmd = {0};
 };
 
-LowState RobotInterface::ReceiveObservation() {
-    int is_zero = 1;
-    do{
-        for (int motor_id = 0; motor_id < 12; motor_id++) {
-            if (state.motorState[motor_id].q == 0){
-                is_zero = 0;
-                break;
-            }
-        }
-        std::this_thread::sleep_for(std::chrono::duration<double>(0.01));
-    }while(is_zero == 0);
-
-    return state;
+RobotInterface::RobotInterface() : safe(LeggedType::A1), udp(LOWLEVEL), breaking_(false)
+{
+    setup_torque_motors();
+    UpdateObservation();
+    send_command_loop_thread_ = std::thread(&RobotInterface::SendCommandThread, this);
+    send_command_loop_thread_.detach(); // 让线程在后台运行，不阻塞主线程
 }
 
-void RobotInterface::SendCommand(std::array<float, 60> motorcmd) {
-//    ReceiveObservation();
+void RobotInterface::setup_torque_motors()
+{
+    for (int i = 0; i < 12; ++i)
+    {
+        torque_motors[i] = PDHybridMotorControl(MOTOR_NAMES[i], LOWER_BOUND[i % 3], UPPER_BOUND[i % 3], 0.0, 0.0, MAX_TORQUE, MAX_TORQUE, MAX_TORQUE * 0.3);
+    }
+}
 
+LowState RobotInterface::ReceiveObservation()
+{
+    LowState state_data = {0};
+    udp.Recv();
+    udp.GetRecv(state_data);
+    return state_data;
+}
+
+void RobotInterface::UpdateObservation()
+{
+    LowState state_read = ReceiveObservation();
+    if (is_valid_observation(state_read))
+    {
+        state = state_read;
+    }
+    else
+    {
+        std::cout << "get an invalid state reading!" << std::endl;
+    }
+}
+
+void RobotInterface::UpdateCommand(std::array<float, 60> motorcmd)
+{
+    breaking_ = false;
     cmd.levelFlag = 0xff;
-    for (int motor_id = 0; motor_id < 12; motor_id++) {
-    cmd.motorCmd[motor_id].mode = 0x0A;
-
-    cmd.motorCmd[motor_id].Kp = motorcmd[motor_id * 5 + 1];
-    cmd.motorCmd[motor_id].dq = motorcmd[motor_id * 5 + 2];
-    cmd.motorCmd[motor_id].Kd = 1.0;
-    cmd.motorCmd[motor_id].tau = 0.0;
-
-    double clip_set_1 = std::max(
-                    std::min(static_cast<double>(state.motorState[motor_id].q + max_torque / cmd.motorCmd[motor_id].Kp), static_cast<double>(cmd.motorCmd[motor_id].q)),
-                    state.motorState[motor_id].q - max_torque / cmd.motorCmd[motor_id].Kp);
-    cmd.motorCmd[motor_id].q = std::max(std::min(clip_set_1,static_cast<double>(upper_bound[motor_id % 3])),static_cast<double>(lower_bound[motor_id % 3]));
+    for (int motor_id = 0; motor_id < 12; motor_id++)
+    {
+        cmd.motorCmd[motor_id].mode = 0x0A;
+        cmd.motorCmd[motor_id].q = motorcmd[motor_id * 5];
+        cmd.motorCmd[motor_id].Kp = motorcmd[motor_id * 5 + 1];
+        cmd.motorCmd[motor_id].dq = motorcmd[motor_id * 5 + 2];
+        cmd.motorCmd[motor_id].Kd = motorcmd[motor_id * 5 + 3];
+        cmd.motorCmd[motor_id].tau = motorcmd[motor_id * 5 + 4];
     }
-
-//    std::cout << "send " << std::endl;
-//    safe.PositionLimit(cmd);
-//    safe.PowerProtect(cmd, state, power_level);
-//    udp.SetSend(cmd);
-//    udp.Send();
 }
 
-void RobotInterface::InitEnvironment() {
-    std::string fileName = "/home/ubuntu/Desktop/a1_real_robot/0114_traj/saved/cmd.txt";
-    std::ofstream outputFile(fileName, std::ios::app);
-    auto currentTime = std::chrono::high_resolution_clock::now();
-//    auto duration = std::chrono::duration_cast<std::chrono::duration<double>>(currentTime.time_since_epoch());
-    if (!outputFile.is_open()) {
-        std::cerr << "Failed to open the file: " << fileName << std::endl;
-        return;
-    }
-    while (true) {
-        udp.Recv();
-        udp.GetRecv(state1);
-        int flag = 1;
-        for (int motor_id = 0; motor_id < 12; motor_id++) {
-//            std::cout << state1.motorState[motor_id].q << std::endl;
-            if (state1.motorState[motor_id].q == 0){
-                flag = 0;
-                break;
+void RobotInterface::SendCommandThread()
+{
+    while (true)
+    {
+        UpdateObservation();
+        LowCmd cmd_to_send = {0};
+        for (int motor_id = 0; motor_id < 12; motor_id++)
+        {
+            if (breaking_)
+            {
+                cmd_to_send.motorCmd[motor_id].mode = 0x00; // Electronic braking mode.
             }
-//        std::cout << flag << std::endl;
-        if (flag){
-            state = state1;
+            else
+            {
+                double torque = torque_motors[motor_id].get_torque(state.motorState[motor_id].q, state.motorState[motor_id].dq,
+                                                                   cmd.motorCmd[motor_id].q, cmd.motorCmd[motor_id].dq,
+                                                                   cmd.motorCmd[motor_id].tau);
+                cmd_to_send.motorCmd[motor_id].mode = 0x0A;
+                cmd_to_send.motorCmd[motor_id].q = 0.0;
+                cmd_to_send.motorCmd[motor_id].Kp = PosStopF;
+                cmd_to_send.motorCmd[motor_id].dq = 0.0;
+                cmd_to_send.motorCmd[motor_id].Kd = VelStopF;
+                cmd_to_send.motorCmd[motor_id].tau = torque;
             }
+
         }
-
-        cmd.levelFlag = 0xff;
-            std::string idx = " ";
-            for (int motor_id = 0; motor_id < 12; motor_id++) {
-
-                if (cmd.motorCmd[motor_id].Kp == 0) {
-                        cmd.motorCmd[motor_id].mode = 0x00;  // Electronic braking mode.
-                }
-                else
-                {
-                    cmd.motorCmd[motor_id].mode = 0x0A;
-                    double clip_set_1 = std::max(
-                    std::min(static_cast<double>(state.motorState[motor_id].q + max_torque / cmd.motorCmd[motor_id].Kp), static_cast<double>(cmd.motorCmd[motor_id].q)),
-                    state.motorState[motor_id].q - max_torque / cmd.motorCmd[motor_id].Kp);
-                    cmd.motorCmd[motor_id].q = std::max(std::min(clip_set_1,static_cast<double>(upper_bound[motor_id % 3])),static_cast<double>(lower_bound[motor_id % 3]));
-
-                    cmd.motorCmd[motor_id].tau = 0.0;
-                    idx += std::to_string(cmd.motorCmd[motor_id].mode) + "," + std::to_string(state.motorState[motor_id].q) + "," + std::to_string(cmd.motorCmd[motor_id].q) + "," + std::to_string(cmd.motorCmd[motor_id].Kp) + "," +  std::to_string(state.motorState[motor_id].temperature) + ",";
-                }
-
-//                cmd.motorCmd[motor_id].Kp = 1.0;
-
-            }
-            safe.PositionLimit(cmd);
-            safe.PowerProtect(cmd, state, power_level);
-            udp.SetSend(cmd);
-            udp.Send();
-//            std::cout << state.motorState[0].q << std::endl;
-            std::this_thread::sleep_for(std::chrono::duration<double>(0.01));
-            auto endTime = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::duration<double>>(endTime.time_since_epoch());
-            outputFile << std::fixed << std::setprecision(6) << duration.count() << ',' << idx << "\n";
+        safe.PositionLimit(cmd_to_send);
+        safe.PowerProtect(cmd_to_send, state, POWER_LEVEL);
+        udp.SetSend(cmd_to_send);
+        udp.Send();
+        std::this_thread::sleep_for(std::chrono::duration<double>(SLEEP_DURATION));
     }
-    outputFile.close();
 }
 
-void RobotInterface::Brake() {
-    for (int motor_id = 0; motor_id < 12; motor_id++) {
-        cmd.motorCmd[motor_id].mode = 0x00;  // Electronic braking mode.
-    }
-//    udp.SetSend(cmd);
-//    udp.Send();
-//    Write2file("brake");
+void RobotInterface::Brake()
+{
+    breaking_ = true;
 }
 
 namespace py = pybind11;
 
 // TODO: Expose all of comm.h and the RobotInterface Class.
 
-PYBIND11_MODULE(robot_interface, m) {
+PYBIND11_MODULE(robot_interface, m)
+{
     m.doc() = R"pbdoc(
           A1 Robot Interface Python Bindings
           -----------------------
@@ -302,15 +312,14 @@ PYBIND11_MODULE(robot_interface, m) {
     py::class_<RobotInterface>(m, "RobotInterface")
         .def(py::init<>())
         .def("receive_observation", &RobotInterface::ReceiveObservation)
-        .def("send_command", &RobotInterface::SendCommand)
+        .def("update_command", &RobotInterface::UpdateCommand)
         .def("brake", &RobotInterface::Brake);
 
-    #ifdef VERSION_INFO
-      m.attr("__version__") = VERSION_INFO;
-    #else
-      m.attr("__version__") = "dev";
-    #endif
+#ifdef VERSION_INFO
+    m.attr("__version__") = VERSION_INFO;
+#else
+    m.attr("__version__") = "dev";
+#endif
 
-      m.attr("TEST") = py::int_(int(42));
-
+    m.attr("TEST") = py::int_(int(42));
 }
