@@ -41,7 +41,7 @@ const std::string MOTOR_NAMES[12] =
 const double UPPER_BOUND[3] = {0.802851455917, 4.18879020479, -0.916297857297};
 const double LOWER_BOUND[3] = {-0.802851455917, -1.0471975512, -2.69653369433};
 const double MAX_TORQUE = 15.0;
-const double SLEEP_DURATION = 0.01;
+const double SLEEP_DURATION = 0.0001;
 const int POWER_LEVEL = 4;
 
 bool is_valid_observation(const LowState &state_data)
@@ -62,10 +62,11 @@ public:
     void UpdateCommand(std::array<float, 60> motorcmd);
     void Brake();
     void SendCommandThread();
-    void UpdateObservation();
+    bool UpdateObservation();
 
 private:
     void setup_torque_motors();
+    void send_init();
     bool breaking_;
     PDHybridMotorControl torque_motors[12];
     std::thread send_command_loop_thread_;
@@ -73,14 +74,33 @@ private:
     Safety safe;
     LowState state = {0};
     LowCmd cmd = {0};
+    LowCmd cmd_to_send = {0};
 };
 
-RobotInterface::RobotInterface() : safe(LeggedType::A1), udp(LOWLEVEL), breaking_(false)
+RobotInterface::RobotInterface() : safe(LeggedType::A1), udp(LOWLEVEL), breaking_(true)
 {
+    send_init();
     setup_torque_motors();
     UpdateObservation();
     send_command_loop_thread_ = std::thread(&RobotInterface::SendCommandThread, this);
     send_command_loop_thread_.detach(); // 让线程在后台运行，不阻塞主线程
+}
+
+void RobotInterface::send_init()
+{
+    cmd.levelFlag = LOWLEVEL;
+    for (int i = 0; i < 12; i++)
+    {
+        cmd.motorCmd[i].mode = 0x0A;                      // motor switch to servo (PMSM) mode
+        cmd.motorCmd[i].q = PosStopF; // 禁止位置环
+        cmd.motorCmd[i].Kp = 0;
+        cmd.motorCmd[i].dq = VelStopF; // 禁止速度环
+        cmd.motorCmd[i].Kd = 0;
+        cmd.motorCmd[i].tau = 0;
+    }
+    udp.SetSend(cmd);
+    udp.Send();
+    std::this_thread::sleep_for(std::chrono::duration<double>(SLEEP_DURATION));
 }
 
 void RobotInterface::setup_torque_motors()
@@ -99,23 +119,25 @@ LowState RobotInterface::ReceiveObservation()
     return state_data;
 }
 
-void RobotInterface::UpdateObservation()
+bool RobotInterface::UpdateObservation()
 {
     LowState state_read = ReceiveObservation();
     if (is_valid_observation(state_read))
     {
         state = state_read;
+        return true;
     }
     else
     {
         std::cout << "get an invalid state reading!" << std::endl;
+        return false;
     }
 }
 
 void RobotInterface::UpdateCommand(std::array<float, 60> motorcmd)
 {
     breaking_ = false;
-    cmd.levelFlag = 0xff;
+    cmd.levelFlag = LOWLEVEL;
     for (int motor_id = 0; motor_id < 12; motor_id++)
     {
         cmd.motorCmd[motor_id].mode = 0x0A;
@@ -124,7 +146,7 @@ void RobotInterface::UpdateCommand(std::array<float, 60> motorcmd)
         cmd.motorCmd[motor_id].dq = motorcmd[motor_id * 5 + 2];
         cmd.motorCmd[motor_id].Kd = motorcmd[motor_id * 5 + 3];
         cmd.motorCmd[motor_id].tau = motorcmd[motor_id * 5 + 4];
-    }
+    } // q kp dq kd tau
 }
 
 void RobotInterface::SendCommandThread()
@@ -132,30 +154,35 @@ void RobotInterface::SendCommandThread()
     while (true)
     {
         UpdateObservation();
-        LowCmd cmd_to_send = {0};
+        
+        cmd_to_send.levelFlag = LOWLEVEL;
         for (int motor_id = 0; motor_id < 12; motor_id++)
         {
             if (breaking_)
             {
                 cmd_to_send.motorCmd[motor_id].mode = 0x00; // Electronic braking mode.
+                std::cout << "breaking" << std::endl;
             }
             else
             {
+                torque_motors[motor_id].kp_ = cmd.motorCmd[motor_id].Kp;
+                torque_motors[motor_id].kd_ = cmd.motorCmd[motor_id].Kd;
                 double torque = torque_motors[motor_id].get_torque(state.motorState[motor_id].q, state.motorState[motor_id].dq,
                                                                    cmd.motorCmd[motor_id].q, cmd.motorCmd[motor_id].dq,
                                                                    cmd.motorCmd[motor_id].tau);
                 cmd_to_send.motorCmd[motor_id].mode = 0x0A;
-                cmd_to_send.motorCmd[motor_id].q = 0.0;
-                cmd_to_send.motorCmd[motor_id].Kp = PosStopF;
-                cmd_to_send.motorCmd[motor_id].dq = 0.0;
-                cmd_to_send.motorCmd[motor_id].Kd = VelStopF;
+                cmd_to_send.motorCmd[motor_id].q = PosStopF;
+                cmd_to_send.motorCmd[motor_id].Kp = 0.0;
+                cmd_to_send.motorCmd[motor_id].dq = VelStopF;
+                cmd_to_send.motorCmd[motor_id].Kd = 0.0;
                 cmd_to_send.motorCmd[motor_id].tau = torque;
-            }
 
+            }
+            
         }
         safe.PositionLimit(cmd_to_send);
-        safe.PowerProtect(cmd_to_send, state, POWER_LEVEL);
         udp.SetSend(cmd_to_send);
+        safe.PowerProtect(cmd_to_send, state, POWER_LEVEL);
         udp.Send();
         std::this_thread::sleep_for(std::chrono::duration<double>(SLEEP_DURATION));
     }
