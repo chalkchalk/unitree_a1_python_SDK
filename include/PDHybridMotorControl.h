@@ -9,22 +9,12 @@ class PDHybridMotorControl
 {
 public:
     PDHybridMotorControl(){};
-    PDHybridMotorControl(std::string name, double q_min, double q_max, double kp, double kd, double tau_max, double p_max = 0.0, double d_max = 0.0, double q_set_increment_max = 0.0)
-        : name_(name), q_max_(q_max), q_min_(q_min), kp_(kp), kd_(kd), tau_max_(tau_max), p_max_(p_max), d_max_(d_max), q_set_increment_max_(q_set_increment_max){};
+    PDHybridMotorControl(std::string name, double q_min, double q_max, double kp, double kd, double tau_max, double p_max = 0.0, double d_max = 0.0)
+        : name_(name), q_max_(q_max), q_min_(q_min), kp_(kp), kd_(kd), tau_max_(tau_max), p_max_(p_max), d_max_(d_max){};
     double get_torque(double q_now, double q_dot_now, double q_set, double q_dot_set, double feed_forward)
     {
         double torque = 0.0;
-        
-        if(q_set_increment_max_ > 0.0)
-        {
-            double q_set_clip = CLIP(q_set, q_min_, q_max_);
-
-            q_set = q_now + CLIP(q_set_clip - q_now, -q_set_increment_max_, q_set_increment_max_);
-        }
-        else
-        {
-            q_set = CLIP(q_set, q_min_, q_max_);
-        }
+        q_set = CLIP(q_set, q_min_, q_max_);
         double p_output = kp_ * (q_set - q_now);
         if(p_max_ > 0) p_output = CLIP(p_output, -p_max_, p_max_);
         double d_output = kd_ * (q_dot_set - q_dot_now);
@@ -41,5 +31,4 @@ public:
     double tau_max_;
     double p_max_;
     double d_max_;
-    double q_set_increment_max_;
 };

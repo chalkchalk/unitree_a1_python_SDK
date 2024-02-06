@@ -40,10 +40,9 @@ const std::string MOTOR_NAMES[12] =
 
 const double UPPER_BOUND[3] = {0.802851455917, 4.18879020479, -0.916297857297};
 const double LOWER_BOUND[3] = {-0.802851455917, -1.0471975512, -2.69653369433};
-const double MAX_TORQUE = 15.0;
+const double MAX_TORQUE = 17.5;
 const double SLEEP_DURATION = 0.0004;
 const int POWER_LEVEL = 6;
-const double MAX_INCREMENT = 0.2;
 
 bool is_valid_observation(const LowState &state_data)
 {
@@ -63,7 +62,7 @@ public:
     void UpdateCommand(std::array<float, 60> motorcmd);
     void Brake();
     bool UpdateObservation();
-
+    LowState GetObservation();
 private:
     void setup_torque_motors();
     void send_init();
@@ -112,7 +111,7 @@ void RobotInterface::setup_torque_motors()
 {
     for (int i = 0; i < 12; ++i)
     {
-        torque_motors[i] = PDHybridMotorControl(MOTOR_NAMES[i], LOWER_BOUND[i % 3], UPPER_BOUND[i % 3], 0.0, 0.0, MAX_TORQUE, MAX_TORQUE, MAX_TORQUE * 0.5, MAX_INCREMENT);
+        torque_motors[i] = PDHybridMotorControl(MOTOR_NAMES[i], LOWER_BOUND[i % 3], UPPER_BOUND[i % 3], 0.0, 0.0, MAX_TORQUE, MAX_TORQUE, MAX_TORQUE * 0.5);
     }
 }
 
@@ -123,6 +122,12 @@ LowState RobotInterface::ReceiveObservation()
     udp.GetRecv(state_data);
     return state_data;
 }
+
+LowState RobotInterface::GetObservation()
+{
+    return state;
+}
+
 
 bool RobotInterface::UpdateObservation()
 {
@@ -348,7 +353,7 @@ PYBIND11_MODULE(robot_interface, m)
 
     py::class_<RobotInterface>(m, "RobotInterface")
         .def(py::init<>())
-        .def("receive_observation", &RobotInterface::ReceiveObservation)
+        .def("receive_observation", &RobotInterface::GetObservation)
         .def("update_command", &RobotInterface::UpdateCommand)
         .def("brake", &RobotInterface::Brake);
 
