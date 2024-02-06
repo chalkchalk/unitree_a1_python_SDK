@@ -21,10 +21,10 @@ public:
         if(d_max_ > 0) d_output = CLIP(d_output, -d_max_, d_max_);
         torque = p_output + d_output + feed_forward;
         torque = CLIP(torque, -tau_max_, tau_max_);
-        if(name_ == "FR_3")
-        {
-            std::cout << "X: " <<  q_now << ", " << q_set << std::endl;
-        }
+        // if(name_ == "FR_3")
+        // {
+        //     std::cout << "X: " <<  q_now << ", " << q_set << std::endl;
+        // }
         return torque;
     }
     std::string name_;

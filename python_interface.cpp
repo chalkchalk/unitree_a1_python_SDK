@@ -41,7 +41,7 @@ const std::string MOTOR_NAMES[12] =
 const double UPPER_BOUND[3] = {0.802851455917, 4.18879020479, -0.916297857297};
 const double LOWER_BOUND[3] = {-0.802851455917, -1.0471975512, -2.69653369433};
 const double MAX_TORQUE = 15.0;
-const double SLEEP_DURATION = 0.0001;
+const double SLEEP_DURATION = 0.0005;
 const int POWER_LEVEL = 4;
 
 bool is_valid_observation(const LowState &state_data)
@@ -61,15 +61,17 @@ public:
     LowState ReceiveObservation();
     void UpdateCommand(std::array<float, 60> motorcmd);
     void Brake();
-    void SendCommandThread();
     bool UpdateObservation();
 
 private:
     void setup_torque_motors();
     void send_init();
+    void UpdateObservationThread();
+    void SendCommandThread();
     bool breaking_;
     PDHybridMotorControl torque_motors[12];
     std::thread send_command_loop_thread_;
+    std::thread update_observation_loop_thread_;
     UDP udp;
     Safety safe;
     LowState state = {0};
@@ -83,7 +85,9 @@ RobotInterface::RobotInterface() : safe(LeggedType::A1), udp(LOWLEVEL), breaking
     setup_torque_motors();
     UpdateObservation();
     send_command_loop_thread_ = std::thread(&RobotInterface::SendCommandThread, this);
-    send_command_loop_thread_.detach(); // 让线程在后台运行，不阻塞主线程
+    send_command_loop_thread_.detach();
+    update_observation_loop_thread_ = std::thread(&RobotInterface::UpdateObservationThread, this);
+    update_observation_loop_thread_.detach(); 
 }
 
 void RobotInterface::send_init()
@@ -107,7 +111,7 @@ void RobotInterface::setup_torque_motors()
 {
     for (int i = 0; i < 12; ++i)
     {
-        torque_motors[i] = PDHybridMotorControl(MOTOR_NAMES[i], LOWER_BOUND[i % 3], UPPER_BOUND[i % 3], 0.0, 0.0, MAX_TORQUE, MAX_TORQUE, MAX_TORQUE * 0.3);
+        torque_motors[i] = PDHybridMotorControl(MOTOR_NAMES[i], LOWER_BOUND[i % 3], UPPER_BOUND[i % 3], 0.0, 0.0, MAX_TORQUE, MAX_TORQUE, MAX_TORQUE * 0.5);
     }
 }
 
@@ -148,12 +152,18 @@ void RobotInterface::UpdateCommand(std::array<float, 60> motorcmd)
         cmd.motorCmd[motor_id].tau = motorcmd[motor_id * 5 + 4];
     } // q kp dq kd tau
 }
-
+void RobotInterface::UpdateObservationThread()
+{
+     while (true)
+    {
+        UpdateObservation();
+        std::this_thread::sleep_for(std::chrono::duration<double>(SLEEP_DURATION));
+    }
+}
 void RobotInterface::SendCommandThread()
 {
     while (true)
     {
-        UpdateObservation();
         
         cmd_to_send.levelFlag = LOWLEVEL;
         for (int motor_id = 0; motor_id < 12; motor_id++)
@@ -161,7 +171,6 @@ void RobotInterface::SendCommandThread()
             if (breaking_)
             {
                 cmd_to_send.motorCmd[motor_id].mode = 0x00; // Electronic braking mode.
-                std::cout << "breaking" << std::endl;
             }
             else
             {

@@ -21,9 +21,9 @@ motor_index = leg_index * 3 + 2
 for i in range(1000):
     angle = 0.5 * np.sin(0.02 * i) - 1.8
     cmd[motor_index * 5 + 0] = angle
-    cmd[motor_index * 5 + 1] = 20
+    cmd[motor_index * 5 + 1] = 50
     cmd[motor_index * 5 + 2] = 0.0
-    cmd[motor_index * 5 + 3] = 0.1 # kd
+    cmd[motor_index * 5 + 3] = 1.2 # kd
     cmd[motor_index * 5 + 4] = 0
     # print(angle)
     robot_interface.update_command(cmd)

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(unitree_legged_sdk)
 set (PYBIND11_PYTHON_VERSION "3.9")
-
+set(CMAKE_BUILD_TYPE "Release")
 include_directories(include)
 
 link_directories(lib)
