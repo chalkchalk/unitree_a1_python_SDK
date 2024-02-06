@@ -41,8 +41,9 @@ const std::string MOTOR_NAMES[12] =
 const double UPPER_BOUND[3] = {0.802851455917, 4.18879020479, -0.916297857297};
 const double LOWER_BOUND[3] = {-0.802851455917, -1.0471975512, -2.69653369433};
 const double MAX_TORQUE = 15.0;
-const double SLEEP_DURATION = 0.0005;
-const int POWER_LEVEL = 4;
+const double SLEEP_DURATION = 0.0004;
+const int POWER_LEVEL = 6;
+const double MAX_INCREMENT = 0.2;
 
 bool is_valid_observation(const LowState &state_data)
 {
@@ -104,14 +105,14 @@ void RobotInterface::send_init()
     }
     udp.SetSend(cmd);
     udp.Send();
-    std::this_thread::sleep_for(std::chrono::duration<double>(SLEEP_DURATION));
+    std::this_thread::sleep_for(std::chrono::duration<double>(0.01));
 }
 
 void RobotInterface::setup_torque_motors()
 {
     for (int i = 0; i < 12; ++i)
     {
-        torque_motors[i] = PDHybridMotorControl(MOTOR_NAMES[i], LOWER_BOUND[i % 3], UPPER_BOUND[i % 3], 0.0, 0.0, MAX_TORQUE, MAX_TORQUE, MAX_TORQUE * 0.5);
+        torque_motors[i] = PDHybridMotorControl(MOTOR_NAMES[i], LOWER_BOUND[i % 3], UPPER_BOUND[i % 3], 0.0, 0.0, MAX_TORQUE, MAX_TORQUE, MAX_TORQUE * 0.5, MAX_INCREMENT);
     }
 }
 
